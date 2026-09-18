@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DG Licensing</title>
+<style>
+  :root { --bg:#0b0f15; --panel:#141b24; --raised:#1a2330; --line:#212b37; --fg:#eef2f6; --muted:#8fa0b0;
+          --accent:#5aa8f2; --accent-soft:rgba(90,168,242,.14);
+          --ok:#4bc97a; --warn:#e3ac47; --bad:#f9695f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg);
+         -webkit-font-smoothing:antialiased; }
+  header { display:flex; align-items:center; gap:24px; padding:14px 24px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; margin:0; font-weight:700; letter-spacing:.2px; display:flex; align-items:center; gap:9px; }
+  .mark { width:8px; height:8px; border-radius:2px; background:var(--accent); flex:none; }
+  nav { display:flex; gap:2px; }
+  nav button { background:transparent; color:var(--muted); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:13.5px; font-weight:500; }
+  nav button.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  main { padding:24px; max-width:1200px; margin:0 auto; }
+  h2 { font-size:14px; margin:0 0 14px; font-weight:600; letter-spacing:.1px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  tr:nth-child(even) td { background:rgba(255,255,255,.015); }
+  tr.click { cursor:pointer; } tr.click:hover td { background:#1c2733; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:12px; background:#22303f; }
+  .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); } .pill.bad { color:var(--bad); }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin-top:18px;
+           box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 14px 30px -18px rgba(0,0,0,.55); }
+  button.act { background:var(--accent); color:#08131f; border:none; border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; font-weight:600;
+               box-shadow:0 4px 12px -4px rgba(90,168,242,.45); }
+  button.outline { background:transparent; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; font-weight:500; }
+  button[disabled] { background:#242e3a; color:var(--muted); cursor:not-allowed; box-shadow:none; }
+  button.mini { background:transparent; color:var(--accent); border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; font-size:12px; }
+  button.danger { background:transparent; color:var(--bad); border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; }
+  input,select,textarea { background:#0a0e14; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:13px monospace; }
+  textarea { font-family:system-ui,sans-serif; width:100%; min-height:60px; resize:vertical; }
+  label { display:block; color:var(--muted); font-size:11px; margin:8px 0 4px; text-transform:uppercase; letter-spacing:.5px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .muted { color:var(--muted); } .mono { font-family:monospace; }
+  .cards { display:flex; gap:16px; flex-wrap:wrap; }
+  .card { background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:16px 18px; min-width:140px; cursor:pointer;
+          box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 20px -14px rgba(0,0,0,.5); }
+  .card.active { border-color:var(--accent); }
+  .card .n { font-size:16px; font-weight:700; } .card .l { color:var(--muted); font-size:11px; margin-top:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mark"></span>DG Licensing</h1>
+  <nav id="nav">
+    <button data-tab="customers" class="active">Customers</button>
+    <button data-tab="licenses">Licenses</button>
+    <button data-tab="audit">Audit log</button>
+    <button data-tab="users">Users</button>
+  </nav>
+  <span style="flex:1"></span>
+  <span id="whoami-bar" class="muted" style="display:none; align-items:center; gap:8px">
+    <span id="whoami"></span>
+    <button class="mini" id="change-pw">change password</button>
+    <button class="mini" id="logout">logout</button>
+  </span>
+</header>
+<main id="view"></main>
+
+<script>
+function el(tag, props, kids) {
+  const e = document.createElement(tag);
+  props = props || {};
+  for (const k in props) {
+    const val = props[k];
+    if (k === 'class') e.className = val;
+    else if (k === 'html') e.innerHTML = val;
+    else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), val);
+    else e.setAttribute(k, val);
+  }
+  const list = Array.isArray(kids) ? kids : (kids == null ? [] : [kids]);
+  for (const c of list) {
+    if (c == null || c === '') continue;
+    e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+async function api(method, url, body) {
+  const opt = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opt.body = JSON.stringify(body);
+  const r = await fetch(url, opt);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch (e) {}
+    if (r.status === 401 && url !== '/api/auth/login' && url !== '/api/auth/me') {
+      CURRENT_USER = null; loginView();
+    }
+    throw new Error(detail);
+  }
+  return r.status === 204 ? null : r.json();
+}
+async function apiUpload(url, file) {
+  const fd = new FormData(); fd.append('file', file);
+  const r = await fetch(url, { method: 'POST', body: fd });
+  if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail || d; } catch (e) {} throw new Error(d); }
+  return r.json();
+}
+function fmt(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+let CURRENT_USER = null;
+let tab = 'customers';
+let selectedCustomerId = null;
+
+document.getElementById('nav').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || !b.dataset.tab) return;
+  tab = b.dataset.tab;
+  for (const x of document.querySelectorAll('#nav button')) x.classList.toggle('active', x.dataset.tab === tab);
+  render();
+});
+document.getElementById('logout').addEventListener('click', async () => {
+  try { await api('POST', '/api/auth/logout'); } catch (e) {}
+  CURRENT_USER = null; loginView();
+});
+
+function showModal(title, fields) {
+  return new Promise(resolve => {
+    const overlay = el('div', { style:
+      'position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:1000' });
+    const inputs = {};
+    const fieldDivs = fields.map(f => {
+      const input = el('input', { type: f.type || 'password', size: '24' });
+      inputs[f.key] = input;
+      return el('div', { style: 'margin-top:8px' }, [el('label', {}, f.label), input]);
+    });
+    const finish = r => { overlay.remove(); resolve(r); };
+    const submit = () => { const out = {}; for (const f of fields) out[f.key] = inputs[f.key].value; finish(out); };
+    const panel = el('div', { class: 'panel', style: 'width:320px' }, [
+      el('h2', {}, title), ...fieldDivs,
+      el('div', { style: 'margin-top:14px' }, [
+        el('button', { class: 'act', onclick: submit }, 'OK'), ' ',
+        el('button', { class: 'mini', onclick: () => finish(null) }, 'Cancel'),
+      ]),
+    ]);
+    panel.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') finish(null); });
+    overlay.append(panel); document.body.append(overlay);
+    inputs[fields[0].key].focus();
+  });
+}
+document.getElementById('change-pw').addEventListener('click', async () => {
+  const r = await showModal('Change password', [
+    { key: 'current_password', label: 'Current password' },
+    { key: 'new_password', label: 'New password' },
+  ]);
+  if (!r || !r.current_password || !r.new_password) return;
+  try { await api('POST', '/api/auth/change-password', r); alert('Password changed.'); }
+  catch (e) { alert('Failed: ' + e.message); }
+});
+
+function loginView() {
+  document.getElementById('nav').style.display = 'none';
+  document.getElementById('whoami-bar').style.display = 'none';
+  const v = document.getElementById('view');
+  v.innerHTML = '';
+  const u = el('input', { placeholder: 'username', size: '20' });
+  const p = el('input', { type: 'password', placeholder: 'password', size: '20' });
+  const err = el('div', { class: 'muted', style: 'margin-top:8px' }, '');
+  const doLogin = async () => {
+    err.textContent = '';
+    try {
+      CURRENT_USER = await api('POST', '/api/auth/login', { username: u.value, password: p.value });
+      document.getElementById('nav').style.display = '';
+      document.getElementById('whoami-bar').style.display = 'inline-flex';
+      applyRoleVisibility();
+      tab = 'customers';
+      render();
+    } catch (e) { err.textContent = e.message; }
+  };
+  u.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  p.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  v.append(el('div', { class: 'panel', style: 'max-width:320px; margin:60px auto' }, [
+    el('h2', {}, 'Sign in'),
+    el('div', {}, [el('label', {}, 'Username'), u]),
+    el('div', { style: 'margin-top:8px' }, [el('label', {}, 'Password'), p]),
+    el('div', { style: 'margin-top:14px' }, [el('button', { class: 'act', onclick: doLogin }, 'Sign in')]),
+    err,
+  ]));
+}
+
+function applyRoleVisibility() {
+  const isSuper = !!CURRENT_USER && CURRENT_USER.role === 'super_admin';
+  for (const b of document.querySelectorAll('#nav button')) {
+    b.style.display = (b.dataset.tab === 'users' && !isSuper) ? 'none' : '';
+  }
+  document.getElementById('whoami').textContent = CURRENT_USER ? `${CURRENT_USER.username} (${CURRENT_USER.role})` : '';
+}
+
+async function checkAuth() {
+  try { CURRENT_USER = await api('GET', '/api/auth/me'); return true; }
+  catch (e) { CURRENT_USER = null; return false; }
+}
+
+async function render() {
+  const v = document.getElementById('view');
+  try {
+    if (tab === 'customers') return customersPage(v);
+    if (tab === 'licenses') return licensesPage(v);
+    if (tab === 'audit') return auditPage(v);
+    if (tab === 'users') return usersPage(v);
+  } catch (e) {
+    v.innerHTML = '';
+    v.append(el('div', { class: 'panel' }, 'Error: ' + e.message));
+  }
+}
+
+// ----------------------------------------------------------------- customers
+async function customersPage(v) {
+  v.innerHTML = '';
+  const customers = await api('GET', '/api/customers');
+
+  const nameIn = el('input', { placeholder: 'customer name', size: '24' });
+  const notesIn = el('textarea', { placeholder: 'notes (optional)' });
+  const addBtn = el('button', { class: 'act', onclick: async () => {
+    if (!nameIn.value.trim()) return;
+    try { await api('POST', '/api/customers', { name: nameIn.value.trim(), notes: notesIn.value.trim() || null }); customersPage(v); }
+    catch (e) { alert('Failed: ' + e.message); }
+  } }, 'Add customer');
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'New customer'),
+    el('div', { class: 'row' }, [el('div', {}, [el('label', {}, 'Name'), nameIn]), addBtn]),
+    el('div', { style: 'margin-top:6px' }, [el('label', {}, 'Notes'), notesIn]),
+  ]));
+
+  v.append(el('h2', { style: 'margin-top:20px' }, 'Customers (' + customers.length + ')'));
+  const cards = el('div', { class: 'cards' });
+  for (const c of customers) {
+    const card = el('div', { class: 'card' + (c.id === selectedCustomerId ? ' active' : ''),
+      onclick: () => { selectedCustomerId = c.id; customersPage(v); } },
+      [el('div', { class: 'n' }, c.name), el('div', { class: 'l' }, c.notes || ' ')]);
+    cards.append(card);
+  }
+  v.append(cards);
+
+  if (selectedCustomerId != null) {
+    const cust = customers.find(c => c.id === selectedCustomerId);
+    if (!cust) { selectedCustomerId = null; return; }
+    const locations = await api('GET', '/api/locations?customer_id=' + selectedCustomerId);
+    const panel = el('div', { class: 'panel' });
+    panel.append(el('h2', {}, 'Locations — ' + cust.name));
+    const locNameIn = el('input', { placeholder: 'location name', size: '20' });
+    const locAddrIn = el('input', { placeholder: 'address (optional)', size: '24' });
+    const locAdd = el('button', { class: 'act', onclick: async () => {
+      if (!locNameIn.value.trim()) return;
+      try {
+        await api('POST', '/api/locations', { customer_id: selectedCustomerId, name: locNameIn.value.trim(), address: locAddrIn.value.trim() || null });
+        customersPage(v);
+      } catch (e) { alert('Failed: ' + e.message); }
+    } }, 'Add location');
+    panel.append(el('div', { class: 'row' }, [
+      el('div', {}, [el('label', {}, 'Name'), locNameIn]),
+      el('div', {}, [el('label', {}, 'Address'), locAddrIn]),
+      locAdd,
+    ]));
+    const rows = locations.map(l => el('tr', {}, [el('td', {}, l.name), el('td', {}, l.address || '—'), el('td', { class: 'muted' }, l.notes || '')]));
+    panel.append(el('table', { style: 'margin-top:12px' }, [
+      el('tr', {}, [el('th', {}, 'Name'), el('th', {}, 'Address'), el('th', {}, 'Notes')]), ...rows,
+    ]));
+    v.append(panel);
+  }
+}
+
+// ------------------------------------------------------------------ licenses
+function licenseStatusPill(lic) {
+  if (!lic.expires_at) return el('span', { class: 'pill ok' }, 'perpetual');
+  const days = Math.floor((new Date(lic.expires_at) - new Date()) / 86400000);
+  if (days < 0) return el('span', { class: 'pill bad' }, 'expired');
+  if (days <= 30) return el('span', { class: 'pill warn' }, days + 'd left');
+  return el('span', { class: 'pill ok' }, lic.expires_at);
+}
+
+async function licensesPage(v) {
+  v.innerHTML = '';
+  const [customers, licenses] = await Promise.all([api('GET', '/api/customers'), api('GET', '/api/licenses')]);
+
+  const custSel = el('select', {}, [el('option', { value: '' }, 'select a customer'),
+    ...customers.map(c => el('option', { value: c.id }, c.name))]);
+  const locSel = el('select', {}, [el('option', { value: '' }, 'select a location')]);
+  custSel.addEventListener('change', async () => {
+    locSel.innerHTML = '';
+    locSel.append(el('option', { value: '' }, 'select a location'));
+    if (!custSel.value) return;
+    const locs = await api('GET', '/api/locations?customer_id=' + custSel.value);
+    for (const l of locs) locSel.append(el('option', { value: l.id }, l.name));
+  });
+
+  const fileIn = el('input', { type: 'file' });
+  const instIn = el('input', { placeholder: 'installation_id', size: '40' });
+  const machCountNote = el('span', { class: 'muted' }, '');
+  let currentMachineCount = null;
+  const parseBtn = el('button', { class: 'mini', onclick: async () => {
+    if (!fileIn.files.length) { alert('Choose the request file the customer sent you first'); return; }
+    try {
+      const r = await apiUpload('/api/licenses/parse-request', fileIn.files[0]);
+      instIn.value = r.installation_id;
+      currentMachineCount = r.current_machine_count;
+      machCountNote.textContent = 'currently ' + (r.current_machine_count ?? '?') + ' machine(s) configured, dg_version=' + (r.dg_version || '?');
+    } catch (e) { alert('Failed: ' + e.message); }
+  } }, 'Read request file →');
+
+  const maxMachinesIn = el('input', { type: 'number', value: '15', size: '4' });
+  const perpetualIn = el('input', { type: 'checkbox' });
+  const expiresIn = el('input', { type: 'date' });
+  perpetualIn.addEventListener('change', () => { expiresIn.disabled = perpetualIn.checked; if (perpetualIn.checked) expiresIn.value = ''; });
+  const notesIn = el('textarea', { placeholder: 'observations / commercial terms notes (optional)' });
+
+  const issueBtn = el('button', { class: 'act', onclick: async () => {
+    if (!custSel.value || !locSel.value) { alert('Pick a customer and location'); return; }
+    if (!instIn.value.trim()) { alert('installation_id is required - read it from the request file or paste it'); return; }
+    try {
+      const result = await api('POST', '/api/licenses', {
+        customer_id: Number(custSel.value), location_id: Number(locSel.value),
+        installation_id: instIn.value.trim(), max_machines: Number(maxMachinesIn.value),
+        expires_at: perpetualIn.checked ? null : (expiresIn.value || null),
+        notes: notesIn.value.trim() || null, current_machine_count: currentMachineCount,
+      });
+      if (result.warning) alert('Issued, but: ' + result.warning);
+      licensesPage(v);
+    } catch (e) { alert('Failed: ' + e.message); }
+  } }, 'Issue license');
+
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'Issue a new license'),
+    el('div', { class: 'row' }, [
+      el('div', {}, [el('label', {}, 'Customer'), custSel]),
+      el('div', {}, [el('label', {}, 'Location'), locSel]),
+    ]),
+    el('div', { class: 'row', style: 'margin-top:6px' }, [
+      el('div', {}, [el('label', {}, "Customer's request file"), fileIn]), parseBtn, machCountNote,
+    ]),
+    el('div', { style: 'margin-top:6px' }, [el('label', {}, 'installation_id'), instIn]),
+    el('div', { class: 'row', style: 'margin-top:6px' }, [
+      el('div', {}, [el('label', {}, 'Max machines'), maxMachinesIn]),
+      el('div', {}, [el('label', {}, 'Expires'), expiresIn]),
+      el('label', { style: 'display:flex; align-items:center; gap:6px; margin:0' }, [perpetualIn, 'perpetual']),
+    ]),
+    el('div', { style: 'margin-top:6px' }, [el('label', {}, 'Notes / observations'), notesIn]),
+    el('div', { style: 'margin-top:12px' }, issueBtn),
+  ]));
+
+  const rows = licenses.map(lic => el('tr', {}, [
+    el('td', {}, lic.customer_name), el('td', {}, lic.location_name),
+    el('td', { class: 'mono' }, String(lic.max_machines)),
+    el('td', {}, licenseStatusPill(lic)),
+    el('td', { class: 'muted' }, fmt(lic.created_at)),
+    el('td', {}, lic.issued_by),
+    el('td', { class: 'muted' }, lic.notes || ''),
+    el('td', {}, el('button', { class: 'mini', onclick: () => downloadLicense(lic.id, lic.customer_name) }, 'download')),
+  ]));
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'Issued licenses (' + licenses.length + ')'),
+    el('table', {}, [
+      el('tr', {}, ['Customer', 'Location', 'Max machines', 'Status', 'Issued', 'Issued by', 'Notes', ''].map(h => el('th', {}, h))),
+      ...rows,
+    ]),
+  ]));
+}
+
+async function downloadLicense(id, customerName) {
+  const r = await fetch('/api/licenses/' + id + '/download');
+  if (!r.ok) { alert('Download failed'); return; }
+  const blob = await r.blob();
+  const a = el('a', { href: URL.createObjectURL(blob), download: customerName.toLowerCase().replace(/ /g, '_') + '_license.json' });
+  document.body.append(a); a.click(); a.remove();
+}
+
+// -------------------------------------------------------------------- audit
+async function auditPage(v) {
+  v.innerHTML = '';
+  const rows = await api('GET', '/api/audit-log');
+  const trs = rows.map(r => el('tr', {}, [
+    el('td', { class: 'muted' }, fmt(r.ts)), el('td', {}, r.actor_username),
+    el('td', {}, r.action), el('td', {}, r.target || ''), el('td', { class: 'muted' }, r.detail || ''),
+  ]));
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'Audit log (' + rows.length + ')'),
+    el('table', {}, [
+      el('tr', {}, ['Time', 'User', 'Action', 'Target', 'Detail'].map(h => el('th', {}, h))),
+      ...trs,
+    ]),
+  ]));
+}
+
+// -------------------------------------------------------------------- users
+async function usersPage(v) {
+  v.innerHTML = '';
+  const users = await api('GET', '/api/users');
+
+  const uIn = el('input', { placeholder: 'username', size: '18' });
+  const pIn = el('input', { type: 'password', placeholder: 'password (min 8 chars)', size: '18' });
+  const rSel = el('select', {}, [el('option', { value: 'admin' }, 'admin'), el('option', { value: 'super_admin' }, 'super_admin')]);
+  const addBtn = el('button', { class: 'act', onclick: async () => {
+    try { await api('POST', '/api/users', { username: uIn.value.trim(), password: pIn.value, role: rSel.value }); usersPage(v); }
+    catch (e) { alert('Failed: ' + e.message); }
+  } }, 'Create user');
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'New user'),
+    el('div', { class: 'row' }, [
+      el('div', {}, [el('label', {}, 'Username'), uIn]),
+      el('div', {}, [el('label', {}, 'Password'), pIn]),
+      el('div', {}, [el('label', {}, 'Role'), rSel]),
+      addBtn,
+    ]),
+  ]));
+
+  const rows = users.map(u => {
+    const roleSel = el('select', {}, [el('option', { value: 'admin' }, 'admin'), el('option', { value: 'super_admin' }, 'super_admin')]);
+    roleSel.value = u.role;
+    roleSel.addEventListener('change', async () => {
+      try { await api('PATCH', '/api/users/' + u.id, { role: roleSel.value }); } catch (e) { alert('Failed: ' + e.message); usersPage(v); }
+    });
+    const enableBtn = el('button', { class: 'mini', onclick: async () => {
+      try { await api('PATCH', '/api/users/' + u.id, { enabled: !u.enabled }); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
+    } }, u.enabled ? 'disable' : 'enable');
+    const delBtn = el('button', { class: 'danger', onclick: async () => {
+      if (!confirm('Delete user ' + u.username + '?')) return;
+      try { await api('DELETE', '/api/users/' + u.id); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
+    } }, 'delete');
+    return el('tr', {}, [
+      el('td', {}, u.username), el('td', {}, roleSel),
+      el('td', {}, u.enabled ? el('span', { class: 'pill ok' }, 'enabled') : el('span', { class: 'pill bad' }, 'disabled')),
+      el('td', { class: 'muted' }, fmt(u.created_at)),
+      el('td', {}, [enableBtn, ' ', delBtn]),
+    ]);
+  });
+  v.append(el('div', { class: 'panel' }, [
+    el('h2', {}, 'Users (' + users.length + ')'),
+    el('table', {}, [el('tr', {}, ['Username', 'Role', 'Status', 'Created', ''].map(h => el('th', {}, h))), ...rows]),
+  ]));
+}
+
+(async function boot() {
+  if (await checkAuth()) {
+    document.getElementById('nav').style.display = '';
+    document.getElementById('whoami-bar').style.display = 'inline-flex';
+    applyRoleVisibility();
+    render();
+  } else {
+    loginView();
+  }
+})();
+</script>
+</body>
+</html>
