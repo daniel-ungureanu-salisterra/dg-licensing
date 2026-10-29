@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from datetime import date
 from pathlib import Path
 
@@ -17,7 +16,8 @@ from .. import auth, crypto, licenses as licenses_svc
 from .. import models as m
 from ..audit import log_action
 from ..config import get_settings
-from ..db import run_startup_migrations, session_scope, wait_for_db
+from ..db import session_scope, wait_for_db
+from ..mailer import send_email
 from ..notify import start_background_thread
 
 logging.basicConfig(level=logging.INFO)
@@ -39,14 +39,41 @@ def _startup():
         crypto.get_or_create_keypair()   # generate the signing key up front, not on the first license
     except crypto.KeyNotConfigured as exc:
         log.warning("signing key not ready yet: %s", exc)
-    threading.Thread(target=start_background_thread, daemon=True).start()
+    start_background_thread()   # spawns its own daemon thread - see app/notify.py
 
 
 def run_startup_migrations_local() -> None:
-    # schema.sql (initdb) creates everything for a fresh DB; nothing to
-    # migrate yet on an existing one - kept as a hook for future ALTERs,
-    # same convention as Data Gateway's dg/db.py.
-    pass
+    """Idempotent ALTER/CREATE steps for schema changes made after the
+    original db/schema.sql - initdb only runs once, so an install that
+    already has data needs these to pick up later changes on restart, same
+    convention as Data Gateway's dg/db.py."""
+    from sqlalchemy import text
+    from ..db import engine
+    stmts = [
+        # email: added after the first deploy (forgot-password flow) - the
+        # bootstrapped admin row predates it, so backfill before enforcing
+        # NOT NULL/UNIQUE rather than have the ALTER fail outright.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT",
+        "UPDATE users SET email = username || '@localhost.invalid' WHERE email IS NULL",
+        "ALTER TABLE users ALTER COLUMN email SET NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email ON users (email)",
+        """
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token       TEXT PRIMARY KEY,
+            user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+            expires_at  TIMESTAMPTZ NOT NULL,
+            used_at     TIMESTAMPTZ
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_password_resets_user ON password_resets (user_id)",
+    ]
+    try:
+        with engine().begin() as conn:
+            for stmt in stmts:
+                conn.execute(text(stmt))
+    except Exception:
+        log.exception("startup migration step failed (continuing)")
 
 
 # ------------------------------------------------------------------ basics
@@ -110,9 +137,59 @@ def change_password(body: ChangePasswordIn, user: dict = Depends(auth.get_curren
     return {"ok": True}
 
 
+class ForgotPasswordIn(BaseModel):
+    email: str
+
+
+# Always the same response whether or not the email matched an account -
+# telling an anonymous caller "no such account" would let them enumerate
+# valid usernames/emails by trying addresses one at a time.
+_FORGOT_PASSWORD_RESPONSE = {"ok": True, "detail": "If that email is registered, a reset link has been sent."}
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(body: ForgotPasswordIn) -> dict:
+    found = auth.find_user_by_email(body.email.strip())
+    if not found:
+        # Still logged (without exposing this to the caller) - a burst of
+        # these for unknown addresses is worth noticing.
+        log_action(body.email.strip(), "FORGOT_PASSWORD_UNKNOWN_EMAIL")
+        return _FORGOT_PASSWORD_RESPONSE
+    token = auth.create_reset_token(found["id"])
+    settings = get_settings()
+    link = f"{settings.public_base_url}?reset_token={token}"
+    body_text = (
+        f"A password reset was requested for your dg-licensing account ({found['username']}).\n\n"
+        f"Set a new password here (valid {settings.reset_token_ttl_minutes} minutes, one-time use):\n{link}\n\n"
+        "If you didn't request this, you can ignore this email - your password hasn't been changed."
+    )
+    try:
+        send_email("[dg-licensing] Reset your password", body_text, to=[found["email"]])
+    except Exception:
+        log.exception("failed to send password-reset email to %s", found["email"])
+    log_action(found["username"], "FORGOT_PASSWORD_REQUESTED")
+    return _FORGOT_PASSWORD_RESPONSE
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(body: ResetPasswordIn) -> dict:
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "password must be at least 8 characters")
+    if not auth.consume_reset_token(body.token, body.new_password):
+        raise HTTPException(400, "this reset link is invalid, expired, or already used - request a new one")
+    log_action("(reset link)", "PASSWORD_RESET_COMPLETED", detail=f"token prefix={body.token[:8]}...")
+    return {"ok": True}
+
+
 # -------------------------------------------------------------------- users
 class UserIn(BaseModel):
     username: str
+    email: str
     password: str
     role: str
 
@@ -120,7 +197,7 @@ class UserIn(BaseModel):
 @app.get("/api/users")
 def list_users(user: dict = Depends(auth.require_role("super_admin"))) -> list[dict]:
     with session_scope() as s:
-        rows = s.execute(select(m.users.c.id, m.users.c.username, m.users.c.role,
+        rows = s.execute(select(m.users.c.id, m.users.c.username, m.users.c.email, m.users.c.role,
                                 m.users.c.enabled, m.users.c.created_at)
                          .order_by(m.users.c.username)).mappings().all()
     return [dict(r) for r in rows]
@@ -135,10 +212,10 @@ def create_user(body: UserIn, user: dict = Depends(auth.require_role("super_admi
     try:
         with session_scope() as s:
             new_id = s.execute(insert(m.users).values(
-                username=body.username, password_hash=auth.hash_password(body.password),
+                username=body.username, email=body.email.strip(), password_hash=auth.hash_password(body.password),
                 role=body.role, enabled=True).returning(m.users.c.id)).scalar_one()
     except Exception as exc:
-        raise HTTPException(400, f"could not create user (duplicate username?): {exc}")
+        raise HTTPException(400, f"could not create user (duplicate username or email?): {exc}")
     log_action(user["username"], "CREATE_USER", target=body.username, detail=f"role={body.role}")
     return {"id": new_id, "username": body.username, "role": body.role}
 
@@ -147,6 +224,7 @@ class UserPatchIn(BaseModel):
     role: str | None = None
     enabled: bool | None = None
     password: str | None = None
+    email: str | None = None
 
 
 @app.patch("/api/users/{user_id}")
@@ -162,6 +240,8 @@ def update_user(user_id: int, body: UserPatchIn, user: dict = Depends(auth.requi
         if len(body.password) < 8:
             raise HTTPException(400, "password must be at least 8 characters")
         values["password_hash"] = auth.hash_password(body.password)
+    if body.email:
+        values["email"] = body.email.strip()
     if not values:
         raise HTTPException(400, "nothing to update")
     with session_scope() as s:
@@ -274,13 +354,25 @@ class LicenseIn(BaseModel):
     location_id: int
     installation_id: str
     max_machines: int
-    expires_at: date | None = None   # None = perpetual
+    # Deliberately no default for either - see the explicit-choice check
+    # below. A blank expires_at used to silently mean "perpetual", which
+    # let someone issue a perpetual license by forgetting a date rather
+    # than by deciding to - perpetual is now something you have to say,
+    # not something that happens when you say nothing.
+    perpetual: bool
+    expires_at: date | None = None
     notes: str | None = None
     current_machine_count: int | None = None   # from parse-request, just for the over-limit warning
 
 
 @app.post("/api/licenses")
 def create_license(body: LicenseIn, user: dict = Depends(auth.get_current_user)) -> dict:
+    if not body.installation_id.strip():
+        raise HTTPException(400, "installation_id is required - load the customer's request file first")
+    if not body.perpetual and body.expires_at is None:
+        raise HTTPException(400, "set an expiry date, or mark this license as perpetual")
+    expires_at = None if body.perpetual else body.expires_at
+
     with session_scope() as s:
         customer = s.execute(select(m.customers.c.name).where(m.customers.c.id == body.customer_id)).first()
         location = s.execute(select(m.locations.c.customer_id).where(m.locations.c.id == body.location_id)).first()
@@ -299,16 +391,42 @@ def create_license(body: LicenseIn, user: dict = Depends(auth.get_current_user))
     try:
         result = licenses_svc.issue_license(
             customer_id=body.customer_id, location_id=body.location_id,
-            installation_id=body.installation_id, max_machines=body.max_machines,
-            expires_at=body.expires_at, notes=body.notes,
+            installation_id=body.installation_id.strip(), max_machines=body.max_machines,
+            expires_at=expires_at, notes=body.notes,
             customer_name=customer[0], issued_by=user["username"])
     except crypto.KeyNotConfigured as exc:
         raise HTTPException(500, str(exc))
     log_action(user["username"], "ISSUE_LICENSE", target=customer[0],
               detail=f"license_id={result['license_uuid']} max_machines={body.max_machines} "
-                     f"expires_at={body.expires_at or 'perpetual'}")
+                     f"expires_at={expires_at or 'perpetual'}")
     result["warning"] = warning
     return json.loads(json.dumps(result, default=str))
+
+
+class LicenseDeleteIn(BaseModel):
+    reason: str
+
+
+@app.delete("/api/licenses/{license_id}")
+def delete_license(license_id: int, body: LicenseDeleteIn, user: dict = Depends(auth.get_current_user)) -> dict:
+    if not body.reason.strip():
+        raise HTTPException(400, "a reason is required")
+    with session_scope() as s:
+        row = s.execute(select(m.licenses, m.customers.c.name.label("customer_name"))
+                        .select_from(m.licenses.join(m.customers, m.licenses.c.customer_id == m.customers.c.id))
+                        .where(m.licenses.c.id == license_id)).mappings().first()
+        if not row:
+            raise HTTPException(404, "license not found")
+        s.execute(delete(m.licenses).where(m.licenses.c.id == license_id))
+    # The row is really gone (not a soft-delete/revoke flag) - this detail
+    # line is what's left to answer "what was that license, and why was it
+    # removed" afterward, so it deliberately repeats everything that
+    # mattered about it plus the operator's stated reason.
+    log_action(user["username"], "DELETE_LICENSE", target=row["customer_name"],
+              detail=f"license_id={row['license_uuid']} installation_id={row['installation_id']} "
+                     f"max_machines={row['max_machines']} expires_at={row['expires_at'] or 'perpetual'} "
+                     f"reason={body.reason.strip()}")
+    return {"ok": True}
 
 
 @app.get("/api/licenses")

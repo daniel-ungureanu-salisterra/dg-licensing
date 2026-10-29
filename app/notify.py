@@ -6,17 +6,16 @@ simpler to operate than a second scheduled service."""
 from __future__ import annotations
 
 import logging
-import smtplib
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
-from email.mime.text import MIMEText
 
 from sqlalchemy import select, update
 
 from . import models as m
 from .config import get_settings
 from .db import session_scope
+from .mailer import send_email
 
 log = logging.getLogger("dgl.notify")
 
@@ -38,29 +37,23 @@ def _due_licenses(today: date, horizon: date):
     return rows
 
 
-def _send_email(subject: str, body: str) -> None:
+def _recipient_emails() -> list[str]:
+    """Every enabled user's email, except:
+    - the bootstrapped 'admin' account specifically - excluded by name, not
+      by whatever email it happens to hold at the moment, per the user's
+      explicit call (2026-09-23): "exclude the admin email at all."
+    - whichever email matches the SMTP sending address, as a backstop in
+      case some other account is ever pointed at that same shared mailbox.
+    No separate recipient-list setting to keep in sync with who actually
+    has an account - add a user, they start getting these; disable one,
+    they stop."""
     settings = get_settings()
-    if not settings.smtp_host or not settings.notify_to:
-        log.warning("SMTP not configured (smtp_host/notify_to) - skipping license-expiry email")
-        return
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = settings.smtp_from or settings.smtp_username
-    recipients = [addr.strip() for addr in settings.notify_to.split(",") if addr.strip()]
-    msg["To"] = ", ".join(recipients)
-
-    if settings.smtp_use_ssl:
-        server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=20)
-    else:
-        server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20)
-    try:
-        if settings.smtp_use_tls and not settings.smtp_use_ssl:
-            server.starttls()
-        if settings.smtp_username:
-            server.login(settings.smtp_username, settings.smtp_password)
-        server.sendmail(msg["From"], recipients, msg.as_string())
-    finally:
-        server.quit()
+    sender = (settings.smtp_from or settings.smtp_username).strip().lower()
+    with session_scope() as s:
+        rows = s.execute(select(m.users.c.username, m.users.c.email)
+                         .where(m.users.c.enabled.is_(True))).all()
+    return [email for username, email in rows
+            if email and username != "admin" and email.strip().lower() != sender]
 
 
 def check_and_send_expiry_warnings() -> int:
@@ -72,6 +65,12 @@ def check_and_send_expiry_warnings() -> int:
     if not due:
         return 0
 
+    recipients = _recipient_emails()
+    if not recipients:
+        log.warning("no eligible recipient emails (every enabled user matches the sending address?) - "
+                    "%d due license(s) NOT notified", len(due))
+        return 0
+
     lines = [
         f"- {r['customer_name']} / {r['location_name']}: license {r['license_uuid']} "
         f"expires {r['expires_at']} (max_machines={r['max_machines']})"
@@ -81,7 +80,7 @@ def check_and_send_expiry_warnings() -> int:
         f"{len(due)} Data Gateway license(s) expire within {settings.notify_days_before} days:\n\n"
         + "\n".join(lines)
     )
-    _send_email(f"[dg-licensing] {len(due)} license(s) expiring soon", body)
+    send_email(f"[dg-licensing] {len(due)} license(s) expiring soon", body, to=recipients)
 
     with session_scope() as s:
         s.execute(update(m.licenses)

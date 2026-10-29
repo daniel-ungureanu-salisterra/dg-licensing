@@ -25,6 +25,7 @@ users = Table(
     "users", metadata,
     Column("id", BigInteger, primary_key=True),
     Column("username", Text, nullable=False, unique=True),
+    Column("email", Text, nullable=False, unique=True),
     Column("password_hash", Text, nullable=False),
     Column("role", Text, nullable=False),
     Column("enabled", Boolean, nullable=False, server_default="true"),
@@ -37,6 +38,15 @@ sessions = Table(
     Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
     Column("expires_at", DateTime(timezone=True), nullable=False),
+)
+
+password_resets = Table(
+    "password_resets", metadata,
+    Column("token", Text, primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("used_at", DateTime(timezone=True)),
 )
 
 customers = Table(

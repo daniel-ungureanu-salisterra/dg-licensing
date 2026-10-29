@@ -16,7 +16,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Cookie, Depends, HTTPException
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, select, update
 
 from . import models as m
 from .config import get_settings
@@ -132,6 +132,48 @@ def bootstrap_superadmin() -> None:
             return
         s.execute(insert(m.users).values(
             username=settings.superadmin_user,
+            email=settings.superadmin_email or f"{settings.superadmin_user}@localhost.invalid",
             password_hash=hash_password(settings.superadmin_password),
             role="super_admin", enabled=True))
     log.info("bootstrapped initial super_admin user %r", settings.superadmin_user)
+
+
+# --------------------------------------------------------- password resets
+# Single-use, short-lived tokens for the "forgot password" email flow -
+# separate from sessions since these authenticate one specific action
+# (setting a new password) rather than a login.
+def find_user_by_email(email: str) -> dict | None:
+    with session_scope() as s:
+        row = s.execute(select(m.users.c.id, m.users.c.username, m.users.c.email, m.users.c.enabled)
+                        .where(m.users.c.email == email)).mappings().first()
+    return dict(row) if row and row["enabled"] else None
+
+
+def create_reset_token(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    ttl = get_settings().reset_token_ttl_minutes
+    with session_scope() as s:
+        s.execute(insert(m.password_resets).values(
+            token=token, user_id=user_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl)))
+    return token
+
+
+def consume_reset_token(token: str, new_password: str) -> bool:
+    """Validates the token (exists, unexpired, unused), sets the new
+    password, marks the token used, and kills every existing session for
+    that user - a password reset should always force a fresh login
+    everywhere, in case the reset was prompted by a compromised session.
+    Returns False (no side effects) for any invalid/expired/reused token."""
+    with session_scope() as s:
+        row = s.execute(select(m.password_resets.c.user_id, m.password_resets.c.expires_at,
+                               m.password_resets.c.used_at)
+                        .where(m.password_resets.c.token == token)).mappings().first()
+        if not row or row["used_at"] is not None or row["expires_at"] < datetime.now(timezone.utc):
+            return False
+        s.execute(update(m.users).where(m.users.c.id == row["user_id"])
+                  .values(password_hash=hash_password(new_password)))
+        s.execute(update(m.password_resets).where(m.password_resets.c.token == token)
+                  .values(used_at=datetime.now(timezone.utc)))
+        s.execute(delete(m.sessions).where(m.sessions.c.user_id == row["user_id"]))
+    return True

@@ -51,7 +51,8 @@
   <h1><span class="mark"></span>DG Licensing</h1>
   <nav id="nav">
     <button data-tab="customers" class="active">Customers</button>
-    <button data-tab="licenses">Licenses</button>
+    <button data-tab="issue-license">License issuing</button>
+    <button data-tab="issued-licenses">Issued licenses</button>
     <button data-tab="audit">Audit log</button>
     <button data-tab="users">Users</button>
   </nav>
@@ -89,7 +90,7 @@ async function api(method, url, body) {
   if (!r.ok) {
     let detail = r.statusText;
     try { detail = (await r.json()).detail || detail; } catch (e) {}
-    if (r.status === 401 && url !== '/api/auth/login' && url !== '/api/auth/me') {
+    if (r.status === 401 && url !== 'api/auth/login' && url !== 'api/auth/me') {
       CURRENT_USER = null; loginView();
     }
     throw new Error(detail);
@@ -122,7 +123,7 @@ document.getElementById('nav').addEventListener('click', e => {
   render();
 });
 document.getElementById('logout').addEventListener('click', async () => {
-  try { await api('POST', '/api/auth/logout'); } catch (e) {}
+  try { await api('POST', 'api/auth/logout'); } catch (e) {}
   CURRENT_USER = null; loginView();
 });
 
@@ -156,7 +157,7 @@ document.getElementById('change-pw').addEventListener('click', async () => {
     { key: 'new_password', label: 'New password' },
   ]);
   if (!r || !r.current_password || !r.new_password) return;
-  try { await api('POST', '/api/auth/change-password', r); alert('Password changed.'); }
+  try { await api('POST', 'api/auth/change-password', r); alert('Password changed.'); }
   catch (e) { alert('Failed: ' + e.message); }
 });
 
@@ -171,7 +172,7 @@ function loginView() {
   const doLogin = async () => {
     err.textContent = '';
     try {
-      CURRENT_USER = await api('POST', '/api/auth/login', { username: u.value, password: p.value });
+      CURRENT_USER = await api('POST', 'api/auth/login', { username: u.value, password: p.value });
       document.getElementById('nav').style.display = '';
       document.getElementById('whoami-bar').style.display = 'inline-flex';
       applyRoleVisibility();
@@ -181,12 +182,68 @@ function loginView() {
   };
   u.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
   p.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  const forgotLink = el('button', { class: 'mini', style: 'margin-top:10px', onclick: () => forgotPasswordView() }, 'Forgot password?');
   v.append(el('div', { class: 'panel', style: 'max-width:320px; margin:60px auto' }, [
     el('h2', {}, 'Sign in'),
     el('div', {}, [el('label', {}, 'Username'), u]),
     el('div', { style: 'margin-top:8px' }, [el('label', {}, 'Password'), p]),
     el('div', { style: 'margin-top:14px' }, [el('button', { class: 'act', onclick: doLogin }, 'Sign in')]),
-    err,
+    err, forgotLink,
+  ]));
+}
+
+function forgotPasswordView() {
+  const v = document.getElementById('view');
+  v.innerHTML = '';
+  const e = el('input', { placeholder: 'your account email', size: '28' });
+  const msg = el('div', { class: 'muted', style: 'margin-top:10px' }, '');
+  const submit = async () => {
+    if (!e.value.trim()) return;
+    try {
+      const r = await api('POST', 'api/auth/forgot-password', { email: e.value.trim() });
+      msg.textContent = r.detail;
+      e.disabled = true; submitBtn.disabled = true;
+    } catch (err) { msg.textContent = 'Failed: ' + err.message; }
+  };
+  const submitBtn = el('button', { class: 'act', onclick: submit }, 'Send reset link');
+  e.addEventListener('keydown', ev => { if (ev.key === 'Enter') submit(); });
+  v.append(el('div', { class: 'panel', style: 'max-width:340px; margin:60px auto' }, [
+    el('h2', {}, 'Reset your password'),
+    el('div', { class: 'muted' }, "Enter the email your account was created with - we'll send a one-time link to set a new password."),
+    el('div', { style: 'margin-top:10px' }, [el('label', {}, 'Email'), e]),
+    el('div', { style: 'margin-top:14px' }, [submitBtn, ' ', el('button', { class: 'mini', onclick: loginView }, '← back to sign in')]),
+    msg,
+  ]));
+}
+
+function resetPasswordView(token) {
+  const v = document.getElementById('view');
+  document.getElementById('nav').style.display = 'none';
+  document.getElementById('whoami-bar').style.display = 'none';
+  v.innerHTML = '';
+  const p1 = el('input', { type: 'password', placeholder: 'new password (min 8 chars)', size: '28' });
+  const p2 = el('input', { type: 'password', placeholder: 'confirm new password', size: '28' });
+  const msg = el('div', { class: 'muted', style: 'margin-top:10px' }, '');
+  const submit = async () => {
+    if (p1.value !== p2.value) { msg.textContent = 'Passwords do not match.'; return; }
+    try {
+      await api('POST', 'api/auth/reset-password', { token, new_password: p1.value });
+      history.replaceState(null, '', location.pathname);
+      v.innerHTML = '';
+      v.append(el('div', { class: 'panel', style: 'max-width:340px; margin:60px auto' }, [
+        el('h2', {}, 'Password changed'),
+        el('div', { class: 'muted' }, 'You can now sign in with your new password.'),
+        el('div', { style: 'margin-top:14px' }, [el('button', { class: 'act', onclick: loginView }, 'Go to sign in')]),
+      ]));
+    } catch (err) { msg.textContent = 'Failed: ' + err.message; }
+  };
+  v.append(el('div', { class: 'panel', style: 'max-width:340px; margin:60px auto' }, [
+    el('h2', {}, 'Set a new password'),
+    el('div', { style: 'margin-top:8px' }, [el('label', {}, 'New password'), p1]),
+    el('div', { style: 'margin-top:8px' }, [el('label', {}, 'Confirm'), p2]),
+    el('div', { style: 'margin-top:14px' }, [el('button', { class: 'act', onclick: submit }, 'Set password')]),
+    msg,
   ]));
 }
 
@@ -199,7 +256,7 @@ function applyRoleVisibility() {
 }
 
 async function checkAuth() {
-  try { CURRENT_USER = await api('GET', '/api/auth/me'); return true; }
+  try { CURRENT_USER = await api('GET', 'api/auth/me'); return true; }
   catch (e) { CURRENT_USER = null; return false; }
 }
 
@@ -207,7 +264,8 @@ async function render() {
   const v = document.getElementById('view');
   try {
     if (tab === 'customers') return customersPage(v);
-    if (tab === 'licenses') return licensesPage(v);
+    if (tab === 'issue-license') return issueLicensePage(v);
+    if (tab === 'issued-licenses') return issuedLicensesPage(v);
     if (tab === 'audit') return auditPage(v);
     if (tab === 'users') return usersPage(v);
   } catch (e) {
@@ -219,13 +277,13 @@ async function render() {
 // ----------------------------------------------------------------- customers
 async function customersPage(v) {
   v.innerHTML = '';
-  const customers = await api('GET', '/api/customers');
+  const customers = await api('GET', 'api/customers');
 
   const nameIn = el('input', { placeholder: 'customer name', size: '24' });
   const notesIn = el('textarea', { placeholder: 'notes (optional)' });
   const addBtn = el('button', { class: 'act', onclick: async () => {
     if (!nameIn.value.trim()) return;
-    try { await api('POST', '/api/customers', { name: nameIn.value.trim(), notes: notesIn.value.trim() || null }); customersPage(v); }
+    try { await api('POST', 'api/customers', { name: nameIn.value.trim(), notes: notesIn.value.trim() || null }); customersPage(v); }
     catch (e) { alert('Failed: ' + e.message); }
   } }, 'Add customer');
   v.append(el('div', { class: 'panel' }, [
@@ -247,7 +305,7 @@ async function customersPage(v) {
   if (selectedCustomerId != null) {
     const cust = customers.find(c => c.id === selectedCustomerId);
     if (!cust) { selectedCustomerId = null; return; }
-    const locations = await api('GET', '/api/locations?customer_id=' + selectedCustomerId);
+    const locations = await api('GET', 'api/locations?customer_id=' + selectedCustomerId);
     const panel = el('div', { class: 'panel' });
     panel.append(el('h2', {}, 'Locations — ' + cust.name));
     const locNameIn = el('input', { placeholder: 'location name', size: '20' });
@@ -255,7 +313,7 @@ async function customersPage(v) {
     const locAdd = el('button', { class: 'act', onclick: async () => {
       if (!locNameIn.value.trim()) return;
       try {
-        await api('POST', '/api/locations', { customer_id: selectedCustomerId, name: locNameIn.value.trim(), address: locAddrIn.value.trim() || null });
+        await api('POST', 'api/locations', { customer_id: selectedCustomerId, name: locNameIn.value.trim(), address: locAddrIn.value.trim() || null });
         customersPage(v);
       } catch (e) { alert('Failed: ' + e.message); }
     } }, 'Add location');
@@ -281,9 +339,9 @@ function licenseStatusPill(lic) {
   return el('span', { class: 'pill ok' }, lic.expires_at);
 }
 
-async function licensesPage(v) {
+async function issueLicensePage(v) {
   v.innerHTML = '';
-  const [customers, licenses] = await Promise.all([api('GET', '/api/customers'), api('GET', '/api/licenses')]);
+  const customers = await api('GET', 'api/customers');
 
   const custSel = el('select', {}, [el('option', { value: '' }, 'select a customer'),
     ...customers.map(c => el('option', { value: c.id }, c.name))]);
@@ -292,23 +350,31 @@ async function licensesPage(v) {
     locSel.innerHTML = '';
     locSel.append(el('option', { value: '' }, 'select a location'));
     if (!custSel.value) return;
-    const locs = await api('GET', '/api/locations?customer_id=' + custSel.value);
+    const locs = await api('GET', 'api/locations?customer_id=' + custSel.value);
     for (const l of locs) locSel.append(el('option', { value: l.id }, l.name));
   });
 
   const fileIn = el('input', { type: 'file' });
-  const instIn = el('input', { placeholder: 'installation_id', size: '40' });
   const machCountNote = el('span', { class: 'muted' }, '');
+  // installation_id is never hand-typed - it comes from the request file
+  // only (see "Load request file" below), because a typed placeholder
+  // ("test2", a note-to-self, etc.) produces a license that signs fine but
+  // is rejected by DG as the wrong installation. Read-only display, not an
+  // <input>.
+  let loadedInstallationId = null;
   let currentMachineCount = null;
-  const parseBtn = el('button', { class: 'mini', onclick: async () => {
+  const instDisplay = el('div', { class: 'mono', style: 'padding:7px 0; color:var(--muted)' }, '— not loaded yet —');
+  const loadBtn = el('button', { class: 'act', onclick: async () => {
     if (!fileIn.files.length) { alert('Choose the request file the customer sent you first'); return; }
     try {
-      const r = await apiUpload('/api/licenses/parse-request', fileIn.files[0]);
-      instIn.value = r.installation_id;
+      const r = await apiUpload('api/licenses/parse-request', fileIn.files[0]);
+      loadedInstallationId = r.installation_id;
+      instDisplay.textContent = r.installation_id;
+      instDisplay.style.color = 'var(--fg)';
       currentMachineCount = r.current_machine_count;
       machCountNote.textContent = 'currently ' + (r.current_machine_count ?? '?') + ' machine(s) configured, dg_version=' + (r.dg_version || '?');
     } catch (e) { alert('Failed: ' + e.message); }
-  } }, 'Read request file →');
+  } }, 'Load request file');
 
   const maxMachinesIn = el('input', { type: 'number', value: '15', size: '4' });
   const perpetualIn = el('input', { type: 'checkbox' });
@@ -318,16 +384,22 @@ async function licensesPage(v) {
 
   const issueBtn = el('button', { class: 'act', onclick: async () => {
     if (!custSel.value || !locSel.value) { alert('Pick a customer and location'); return; }
-    if (!instIn.value.trim()) { alert('installation_id is required - read it from the request file or paste it'); return; }
+    if (!loadedInstallationId) { alert('Load the customer’s request file first - installation_id can’t be typed by hand'); return; }
+    if (!perpetualIn.checked && !expiresIn.value) { alert('Set an expiry date, or check “perpetual” - one of the two is required'); return; }
     try {
-      const result = await api('POST', '/api/licenses', {
+      const result = await api('POST', 'api/licenses', {
         customer_id: Number(custSel.value), location_id: Number(locSel.value),
-        installation_id: instIn.value.trim(), max_machines: Number(maxMachinesIn.value),
-        expires_at: perpetualIn.checked ? null : (expiresIn.value || null),
+        installation_id: loadedInstallationId, max_machines: Number(maxMachinesIn.value),
+        perpetual: perpetualIn.checked, expires_at: perpetualIn.checked ? null : expiresIn.value,
         notes: notesIn.value.trim() || null, current_machine_count: currentMachineCount,
       });
       if (result.warning) alert('Issued, but: ' + result.warning);
-      licensesPage(v);
+      // Jump to the list so the newly issued license (and its download
+      // link) is immediately visible, rather than leaving the operator on
+      // a now-stale form wondering if it worked.
+      tab = 'issued-licenses';
+      for (const x of document.querySelectorAll('#nav button')) x.classList.toggle('active', x.dataset.tab === tab);
+      render();
     } catch (e) { alert('Failed: ' + e.message); }
   } }, 'Issue license');
 
@@ -338,9 +410,9 @@ async function licensesPage(v) {
       el('div', {}, [el('label', {}, 'Location'), locSel]),
     ]),
     el('div', { class: 'row', style: 'margin-top:6px' }, [
-      el('div', {}, [el('label', {}, "Customer's request file"), fileIn]), parseBtn, machCountNote,
+      el('div', {}, [el('label', {}, "Customer's request file"), fileIn]), loadBtn, machCountNote,
     ]),
-    el('div', { style: 'margin-top:6px' }, [el('label', {}, 'installation_id'), instIn]),
+    el('div', { style: 'margin-top:6px' }, [el('label', {}, 'installation_id'), instDisplay]),
     el('div', { class: 'row', style: 'margin-top:6px' }, [
       el('div', {}, [el('label', {}, 'Max machines'), maxMachinesIn]),
       el('div', {}, [el('label', {}, 'Expires'), expiresIn]),
@@ -349,19 +421,44 @@ async function licensesPage(v) {
     el('div', { style: 'margin-top:6px' }, [el('label', {}, 'Notes / observations'), notesIn]),
     el('div', { style: 'margin-top:12px' }, issueBtn),
   ]));
+}
 
-  const rows = licenses.map(lic => el('tr', {}, [
-    el('td', {}, lic.customer_name), el('td', {}, lic.location_name),
-    el('td', { class: 'mono' }, String(lic.max_machines)),
-    el('td', {}, licenseStatusPill(lic)),
-    el('td', { class: 'muted' }, fmt(lic.created_at)),
-    el('td', {}, lic.issued_by),
-    el('td', { class: 'muted' }, lic.notes || ''),
-    el('td', {}, el('button', { class: 'mini', onclick: () => downloadLicense(lic.id, lic.customer_name) }, 'download')),
-  ]));
+// filterCustomerId: null/undefined = all customers; otherwise a customer id
+// (string or number both fine, only ever compared via the select's value).
+async function issuedLicensesPage(v, filterCustomerId) {
+  v.innerHTML = '';
+  const customers = await api('GET', 'api/customers');
+  const url = 'api/licenses' + (filterCustomerId ? '?customer_id=' + filterCustomerId : '');
+  const licenses = await api('GET', url);
+
+  const filterSel = el('select', {}, [el('option', { value: '' }, 'All customers'),
+    ...customers.map(c => el('option', { value: c.id }, c.name))]);
+  filterSel.value = filterCustomerId || '';
+  filterSel.addEventListener('change', () => issuedLicensesPage(v, filterSel.value || null));
+
+  const rows = licenses.map(lic => {
+    const delBtn = el('button', { class: 'danger', onclick: async () => {
+      const r = await showModal('Delete this license?', [{ key: 'reason', label: 'Reason (logged in the audit trail)', type: 'text' }]);
+      if (!r || !r.reason || !r.reason.trim()) return;
+      try { await api('DELETE', 'api/licenses/' + lic.id, { reason: r.reason.trim() }); issuedLicensesPage(v, filterCustomerId); }
+      catch (e) { alert('Failed: ' + e.message); }
+    } }, 'delete');
+    return el('tr', {}, [
+      el('td', {}, lic.customer_name), el('td', {}, lic.location_name),
+      el('td', { class: 'mono' }, String(lic.max_machines)),
+      el('td', {}, licenseStatusPill(lic)),
+      el('td', { class: 'muted' }, fmt(lic.created_at)),
+      el('td', {}, lic.issued_by),
+      el('td', { class: 'muted' }, lic.notes || ''),
+      el('td', {}, [el('button', { class: 'mini', onclick: () => downloadLicense(lic.id, lic.customer_name) }, 'download'), ' ', delBtn]),
+    ]);
+  });
   v.append(el('div', { class: 'panel' }, [
-    el('h2', {}, 'Issued licenses (' + licenses.length + ')'),
-    el('table', {}, [
+    el('div', { class: 'row', style: 'justify-content:space-between; align-items:center' }, [
+      el('h2', { style: 'margin:0' }, 'Issued licenses (' + licenses.length + ')'),
+      el('div', {}, [el('label', { style: 'display:inline; margin-right:6px' }, 'Customer'), filterSel]),
+    ]),
+    el('table', { style: 'margin-top:12px' }, [
       el('tr', {}, ['Customer', 'Location', 'Max machines', 'Status', 'Issued', 'Issued by', 'Notes', ''].map(h => el('th', {}, h))),
       ...rows,
     ]),
@@ -369,7 +466,7 @@ async function licensesPage(v) {
 }
 
 async function downloadLicense(id, customerName) {
-  const r = await fetch('/api/licenses/' + id + '/download');
+  const r = await fetch('api/licenses/' + id + '/download');
   if (!r.ok) { alert('Download failed'); return; }
   const blob = await r.blob();
   const a = el('a', { href: URL.createObjectURL(blob), download: customerName.toLowerCase().replace(/ /g, '_') + '_license.json' });
@@ -379,15 +476,18 @@ async function downloadLicense(id, customerName) {
 // -------------------------------------------------------------------- audit
 async function auditPage(v) {
   v.innerHTML = '';
-  const rows = await api('GET', '/api/audit-log');
+  const rows = await api('GET', 'api/audit-log');
   const trs = rows.map(r => el('tr', {}, [
-    el('td', { class: 'muted' }, fmt(r.ts)), el('td', {}, r.actor_username),
+    el('td', { class: 'muted', style: 'white-space:nowrap' }, fmt(r.ts)), el('td', {}, r.actor_username),
     el('td', {}, r.action), el('td', {}, r.target || ''), el('td', { class: 'muted' }, r.detail || ''),
   ]));
   v.append(el('div', { class: 'panel' }, [
     el('h2', {}, 'Audit log (' + rows.length + ')'),
     el('table', {}, [
-      el('tr', {}, ['Time', 'User', 'Action', 'Target', 'Detail'].map(h => el('th', {}, h))),
+      el('tr', {}, [
+        el('th', { style: 'white-space:nowrap; width:1%' }, 'Time'),
+        ...['User', 'Action', 'Target', 'Detail'].map(h => el('th', {}, h)),
+      ]),
       ...trs,
     ]),
   ]));
@@ -396,19 +496,23 @@ async function auditPage(v) {
 // -------------------------------------------------------------------- users
 async function usersPage(v) {
   v.innerHTML = '';
-  const users = await api('GET', '/api/users');
+  const users = await api('GET', 'api/users');
 
-  const uIn = el('input', { placeholder: 'username', size: '18' });
+  const uIn = el('input', { placeholder: 'username', size: '16' });
+  const emailIn = el('input', { type: 'email', placeholder: 'email (for password resets)', size: '24' });
   const pIn = el('input', { type: 'password', placeholder: 'password (min 8 chars)', size: '18' });
   const rSel = el('select', {}, [el('option', { value: 'admin' }, 'admin'), el('option', { value: 'super_admin' }, 'super_admin')]);
   const addBtn = el('button', { class: 'act', onclick: async () => {
-    try { await api('POST', '/api/users', { username: uIn.value.trim(), password: pIn.value, role: rSel.value }); usersPage(v); }
-    catch (e) { alert('Failed: ' + e.message); }
+    try {
+      await api('POST', 'api/users', { username: uIn.value.trim(), email: emailIn.value.trim(), password: pIn.value, role: rSel.value });
+      usersPage(v);
+    } catch (e) { alert('Failed: ' + e.message); }
   } }, 'Create user');
   v.append(el('div', { class: 'panel' }, [
     el('h2', {}, 'New user'),
     el('div', { class: 'row' }, [
       el('div', {}, [el('label', {}, 'Username'), uIn]),
+      el('div', {}, [el('label', {}, 'Email'), emailIn]),
       el('div', {}, [el('label', {}, 'Password'), pIn]),
       el('div', {}, [el('label', {}, 'Role'), rSel]),
       addBtn,
@@ -419,29 +523,45 @@ async function usersPage(v) {
     const roleSel = el('select', {}, [el('option', { value: 'admin' }, 'admin'), el('option', { value: 'super_admin' }, 'super_admin')]);
     roleSel.value = u.role;
     roleSel.addEventListener('change', async () => {
-      try { await api('PATCH', '/api/users/' + u.id, { role: roleSel.value }); } catch (e) { alert('Failed: ' + e.message); usersPage(v); }
+      try { await api('PATCH', 'api/users/' + u.id, { role: roleSel.value }); } catch (e) { alert('Failed: ' + e.message); usersPage(v); }
     });
     const enableBtn = el('button', { class: 'mini', onclick: async () => {
-      try { await api('PATCH', '/api/users/' + u.id, { enabled: !u.enabled }); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
+      try { await api('PATCH', 'api/users/' + u.id, { enabled: !u.enabled }); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
     } }, u.enabled ? 'disable' : 'enable');
     const delBtn = el('button', { class: 'danger', onclick: async () => {
       if (!confirm('Delete user ' + u.username + '?')) return;
-      try { await api('DELETE', '/api/users/' + u.id); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
+      try { await api('DELETE', 'api/users/' + u.id); usersPage(v); } catch (e) { alert('Failed: ' + e.message); }
     } }, 'delete');
+    // Simpler fallback the user asked for alongside the self-service email
+    // flow: a super_admin can just set someone's password directly.
+    const setPwBtn = el('button', { class: 'mini', onclick: async () => {
+      const r = await showModal('Set password for ' + u.username, [{ key: 'password', label: 'New password', type: 'password' }]);
+      if (!r || !r.password) return;
+      try { await api('PATCH', 'api/users/' + u.id, { password: r.password }); alert('Password set.'); }
+      catch (e) { alert('Failed: ' + e.message); }
+    } }, 'set password');
+    const editEmailBtn = el('button', { class: 'mini', onclick: async () => {
+      const r = await showModal('Email for ' + u.username, [{ key: 'email', label: 'Email', type: 'email' }]);
+      if (!r || !r.email) return;
+      try { await api('PATCH', 'api/users/' + u.id, { email: r.email }); usersPage(v); }
+      catch (e) { alert('Failed: ' + e.message); }
+    } }, 'edit email');
     return el('tr', {}, [
-      el('td', {}, u.username), el('td', {}, roleSel),
+      el('td', {}, u.username), el('td', { class: 'muted' }, u.email), el('td', {}, roleSel),
       el('td', {}, u.enabled ? el('span', { class: 'pill ok' }, 'enabled') : el('span', { class: 'pill bad' }, 'disabled')),
       el('td', { class: 'muted' }, fmt(u.created_at)),
-      el('td', {}, [enableBtn, ' ', delBtn]),
+      el('td', {}, [enableBtn, ' ', setPwBtn, ' ', editEmailBtn, ' ', delBtn]),
     ]);
   });
   v.append(el('div', { class: 'panel' }, [
     el('h2', {}, 'Users (' + users.length + ')'),
-    el('table', {}, [el('tr', {}, ['Username', 'Role', 'Status', 'Created', ''].map(h => el('th', {}, h))), ...rows]),
+    el('table', {}, [el('tr', {}, ['Username', 'Email', 'Role', 'Status', 'Created', ''].map(h => el('th', {}, h))), ...rows]),
   ]));
 }
 
 (async function boot() {
+  const resetToken = new URLSearchParams(location.search).get('reset_token');
+  if (resetToken) { resetPasswordView(resetToken); return; }
   if (await checkAuth()) {
     document.getElementById('nav').style.display = '';
     document.getElementById('whoami-bar').style.display = 'inline-flex';

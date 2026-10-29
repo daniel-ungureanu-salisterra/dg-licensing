@@ -5,6 +5,11 @@
 CREATE TABLE users (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE,
+    -- Required so the forgot-password flow has somewhere to send the reset
+    -- link (app/auth.py's create_reset_token / app/web/app.py's
+    -- /api/auth/forgot-password) - unique so a lookup by email is
+    -- unambiguous.
+    email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     -- Two roles only: 'admin' and 'super_admin'. Both can create customers/
     -- locations/licenses - the only difference is user management, enforced
@@ -20,6 +25,18 @@ CREATE TABLE sessions (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at  TIMESTAMPTZ NOT NULL
 );
+
+-- Single-use, short-lived tokens for the "forgot password" email link -
+-- separate from `sessions` since these authenticate one specific action
+-- (setting a new password), not a login.
+CREATE TABLE password_resets (
+    token       TEXT PRIMARY KEY,
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ
+);
+CREATE INDEX ix_password_resets_user ON password_resets (user_id);
 CREATE INDEX ix_sessions_expires ON sessions (expires_at);
 
 CREATE TABLE customers (

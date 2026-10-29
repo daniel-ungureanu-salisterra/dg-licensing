@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # DG_SUPERADMIN_USER/PASSWORD.
     superadmin_user: str = ""
     superadmin_password: str = ""
+    superadmin_email: str = ""
 
     # Symmetric key (Fernet, `python -c "from cryptography.fernet import
     # Fernet; print(Fernet.generate_key().decode())"`) that encrypts the
@@ -44,10 +45,17 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     smtp_from: str = ""
-    # Comma-separated recipient list for expiry warnings.
-    notify_to: str = ""
     # How many days before expires_at a license first gets flagged.
     notify_days_before: int = 30
+
+    # Forgot-password flow (app/auth.py's reset-token functions, wired up in
+    # app/web/app.py). The link mailed to a user is
+    # f"{public_base_url}?reset_token=..." - the app has no way to know its
+    # own externally-reachable URL on its own (it's mounted under a Caddy
+    # path prefix it's unaware of - see the /licensing handle_path block),
+    # so this has to be set explicitly rather than derived.
+    public_base_url: str = "https://vpna.salisterra.ro/licensing/"
+    reset_token_ttl_minutes: int = 60
 
     @property
     def database_url(self) -> str:
